@@ -1,0 +1,9 @@
+# custom_autofields.libraries.yml
+sync_title_from_key:
+  version: 1.x
+  js:
+    js/sync_title.js: {}
+  dependencies:
+    - core/jquery
+    - core/drupal
+    - core/drupalSettings

@@ -1,0 +1,154 @@
+<?php
+
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\node\NodeInterface;
+use Drupal\Core\Entity\EntityInterface;
+
+/**
+ * @file
+ * Módulo para gestionar identificadores automáticos y títulos para entidades.
+ */
+
+/**
+ * Devuelve la configuración para los tipos de contenido gestionados.
+ */
+function _custom_autofields_get_config($bundle) {
+  $configs = [
+    'ejemplar' => [
+      'title_source'     => 'identifier', //  Behavoir: Title is a copy of the identifier.
+      'identifier_field' => 'field_identificador_ejemplar',
+      'prefix'           => 'COR-',
+      'padding'          => 5,
+    ],
+    'cajon' => [
+      'title_source'     => 'key', // Behavoir: Title is taken from a 'key' field.
+      'identifier_field' => 'field_identificador_cajon',
+      'key_field'        => 'field_clave_cajon',
+      'prefix'           => 'Cajón-',
+      'padding'          => 3,
+    ],
+    'gaveta' => [
+      'title_source'     => 'key', // Behavoir: Title is taken from a 'key' field.
+      'identifier_field' => 'field_identificador_gaveta',
+      'key_field'        => 'field_clave_gaveta',
+      'prefix'           => 'Gaveta-',
+      'padding'          => 3,
+    ],
+  ];
+
+  return $configs[$bundle] ?? false;
+}
+
+/**
+ * Genera el siguiente código secuencial para un tipo de contenido.
+ */
+function custom_autofields_get_next_code($bundle) {
+  $config = _custom_autofields_get_config($bundle);
+  if (!$config) { return NULL; }
+
+  $storage = \Drupal::entityTypeManager()->getStorage('node');
+  $query = $storage->getQuery()
+    ->accessCheck(FALSE)
+    ->condition('type', $bundle)
+    ->sort($config['identifier_field'], 'DESC')
+    ->range(0, 1);
+  $nids = $query->execute();
+
+  $next_number = 1;
+  if (!empty($nids)) {
+    $last_node = $storage->load(reset($nids));
+    $last_code = $last_node->get($config['identifier_field'])->value;
+    if (preg_match('/(\d+)$/', $last_code, $matches)) {
+      $next_number = (int) $matches[1] + 1;
+    }
+  }
+  return $config['prefix'] . sprintf('%0' . $config['padding'] . 'd', $next_number);
+}
+
+/**
+ * Implements hook_entity_presave().
+ */
+function custom_autofields_entity_presave(EntityInterface $entity) {
+  if (!($entity instanceof NodeInterface)) { return; }
+  
+  $bundle = $entity->bundle();
+  $config = _custom_autofields_get_config($bundle);
+  if (!$config) { return; }
+
+  if ($entity->isNew()) {
+    $next_code = custom_autofields_get_next_code($bundle);
+    $entity->set($config['identifier_field'], $next_code);
+    
+    // Set title based on configuration
+    if ($config['title_source'] === 'identifier') {
+      $entity->setTitle($next_code);
+    } else { // 'key'
+      $entity->setTitle($entity->get($config['key_field'])->value);
+    }
+  } else { // On edit
+    $original_code = $entity->original->get($config['identifier_field'])->value;
+    $entity->set($config['identifier_field'], $original_code);
+
+    // Update title based on configuration
+    if ($config['title_source'] === 'identifier') {
+      $entity->setTitle($original_code);
+    } else { // 'key'
+      $entity->setTitle($entity->get($config['key_field'])->value);
+    }
+  }
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function custom_autofields_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+  if (!$form_state->getFormObject() instanceof \Drupal\node\NodeForm) { return; }
+
+  $node = $form_state->getFormObject()->getEntity();
+  $bundle = $node->bundle();
+  $config = _custom_autofields_get_config($bundle);
+  if (!$config) { return; }
+
+  $identifier_field = $config['identifier_field'];
+  $code = $node->isNew() ? custom_autofields_get_next_code($bundle) : $node->get($identifier_field)->value;
+
+  // Logic for the Identifier Field (always disabled)
+  if (isset($form[$identifier_field])) {
+    $form[$identifier_field]['widget'][0]['value']['#default_value'] = $code;
+    $form[$identifier_field]['widget'][0]['value']['#after_build'][] = '_custom_autofields_disable_field_callback';
+  }
+
+  // Logic based on the title source
+  if ($config['title_source'] === 'identifier') {
+    // Disable the title field and sync it with the identifier
+    if (isset($form['title'])) {
+      $form['title']['widget'][0]['value']['#default_value'] = $code;
+      $form['title']['widget'][0]['value']['#after_build'][] = '_custom_autofields_disable_field_callback';
+    }
+  } else { // 'key'
+    // Attach JavaScript to sync the title from the key field
+    $key_field = $config['key_field'];
+    if (isset($form[$key_field])) {
+      $form['#attached']['library'][] = 'custom_autofields/sync_title_from_key';
+      $form['#attached']['drupalSettings']['custom_autofields']['syncFields'] = [
+        'source' => '#edit-' . str_replace('_', '-', $key_field) . '-0-value',
+        'target' => '#edit-title-0-value',
+      ];
+    }
+  }
+}
+
+/**
+ * After build callback to disable a form element and add a description.
+ */
+function _custom_autofields_disable_field_callback($element, FormStateInterface $form_state) {
+  $element['#disabled'] = TRUE;
+  $element['#attributes']['disabled'] = 'disabled';
+  
+  if ($element['#name'] === 'title[0][value]') {
+    $element['#description'] = t('El título es una copia del identificador y no puede ser modificado.');
+  } else {
+    $element['#description'] = t('Este identificador se genera automáticamente y no puede ser modificado.');
+  }
+  return $element;
+}

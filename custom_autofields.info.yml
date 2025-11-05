@@ -1,0 +1,5 @@
+name: 'Custom Auto Fields'
+type: module
+description: 'Gestiona identificadores y títulos automáticos para entidades personalizadas.'
+core_version_requirement: ^9 || ^10
+package: Custom
